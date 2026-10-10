@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dewey Wheel Generator</title>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<style>
+  body{font-family:Tahoma,Arial,sans-serif;margin:0;background:#f4f1ea;color:#222}
+  .wrap{max-width:1200px;margin:auto;padding:16px}
+  h1{font-size:22px;color:#0f6b3c;margin:0 0 12px}
+  .panel{background:#fff;border:1px solid #ddd;border-radius:8px;padding:14px;margin-bottom:14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+  label{display:block;font-size:13px;margin-bottom:3px}
+  input[type=text],input[type=number],select,textarea{width:100%;box-sizing:border-box;padding:6px;border:1px solid #bbb;border-radius:5px;font-family:inherit}
+  input[type=color]{width:100%;height:34px;padding:2px;border:1px solid #bbb;border-radius:5px}
+  textarea{height:260px;font-size:14px;line-height:1.6}
+  button{background:#0f6b3c;color:#fff;border:0;border-radius:6px;padding:9px 18px;font-size:15px;cursor:pointer;font-family:inherit}
+  button.alt{background:#f2b100;color:#222}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .bar{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+  .bar>div{min-width:240px}
+  #out svg{width:100%;height:auto;max-width:900px;display:block;margin:auto;background:#fff;border:1px solid #ddd}
+  .hint{font-size:12px;color:#666;margin-top:6px}
+  [hidden]{display:none!important}
+  .top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .top h1{margin:0}
+  .langbox select{width:auto}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="panel" id="langError" hidden>
+    <p>Could not load the language files from the <b>lang/</b> folder. Open this page through a web server (e.g. <code>python -m http.server</code>) or select the language files (*.json) manually:<br>تعذّر تحميل ملفات اللغة من مجلد <b>lang/</b>. افتح الصفحة عبر خادم ويب أو اختر ملفات اللغة (*.json) يدويًا:</p>
+    <input type="file" id="langFiles" accept=".json,application/json" multiple>
+  </div>
+  <div id="app" hidden>
+  <div class="top"><h1 data-i18n="heading"></h1><div class="langbox">🌐 <select id="langSel" aria-label="Language"></select></div></div>
+
+  <div class="panel">
+    <div class="grid">
+      <div><label data-i18n="font_family"></label><select id="fontFamily"></select></div>
+      <div><label data-i18n="main_size"></label><input type="number" id="mainSize" value="34" min="10" max="80"></div>
+      <div><label data-i18n="sub_size"></label><input type="number" id="subSize" value="20" min="8" max="40"></div>
+      <div><label data-i18n="main_color"></label><input type="color" id="mainColor" value="#c8102e"></div>
+      <div><label data-i18n="main_bg"></label><input type="color" id="mainBg" value="#fff8e1"></div>
+      <div><label data-i18n="range_color"></label><input type="color" id="rangeColor" value="#0f6b3c"></div>
+      <div><label data-i18n="sep_color"></label><input type="color" id="sepColor" value="#f2b100"></div>
+      <div><label data-i18n="circle_color"></label><input type="color" id="circleColor" value="#0f6b3c"></div>
+      <div><label data-i18n="sub_bg"></label><input type="color" id="subBg" value="#ffffff"></div>
+      <div><label data-i18n="sub_color"></label><input type="color" id="subColor" value="#111111"></div>
+      <div><label data-i18n="sub_line"></label><input type="color" id="subLine" value="#2f6fb0"></div>
+      <div><label data-i18n="num_dir"></label><select id="numDir"><option value="uniform" data-i18n="num_dir_uniform"></option><option value="readable" data-i18n="num_dir_readable"></option></select></div>
+      <div><label data-i18n="center_text"></label><input type="text" id="centerText"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <label data-i18n="data_label"></label>
+    <textarea id="data"></textarea>
+    <div class="hint" data-i18n="data_hint"></div>
+  </div>
+
+  <div class="panel bar">
+    <div><label data-i18n="file_name"></label><input type="text" id="fileName" data-i18n-ph="file_name_ph"></div>
+    <button id="btnGen" data-i18n="btn_generate"></button>
+    <button id="btnExport" class="alt" disabled data-i18n="btn_export"></button>
+  </div>
+
+  <div id="out"></div>
+  </div>
+</div>
+
+<script>
+const LANG_DIR = 'lang/';
+const LANGS = {};            // code -> language object
+let L = null, FALL = null;   // current language / default language (fallback for missing keys)
+const t = k => (L && L.ui && L.ui[k]) ?? (FALL && FALL.ui && FALL.ui[k]) ?? k;
+const M = k => (L && L.metrics && L.metrics[k] != null) ? L.metrics[k] : ({fit: 0.35, wrap: 0.5, sub_wrap_below: 0})[k];
+const sampleOf = l => Array.isArray(l.default_data) ? l.default_data.join('\n') : (l.default_data || '');
+
+function addLangs(list) {
+  list.forEach(l => {
+    if (l && l.code && l.ui) { l.dir = l.dir === 'rtl' ? 'rtl' : 'ltr'; LANGS[l.code] = l; }
+  });
+}
+
+function setLang(code) {
+  const prev = L;
+  L = LANGS[code];
+  document.documentElement.lang = L.code;
+  document.documentElement.dir = L.dir;
+  try { localStorage.setItem('dewey_lang', code); } catch (e) {}
+  document.title = t('page_title');
+  $('[data-i18n]').each(function () { $(this).text(t($(this).attr('data-i18n'))); });
+  $('[data-i18n-ph]').each(function () { $(this).attr('placeholder', t($(this).attr('data-i18n-ph'))); });
+  if (L.fonts_url) { $('#langFonts').remove(); $('<link>', {id: 'langFonts', rel: 'stylesheet', href: L.fonts_url}).appendTo('head'); }
+  $('#fontFamily').empty();
+  (L.fonts && L.fonts.length ? L.fonts : ['Tahoma', 'Arial']).forEach(f => $('#fontFamily').append($('<option>').val(f).text(f)));
+  const cur = $('#data').val().trim();
+  if (!prev || !cur || cur === sampleOf(prev).trim() || confirm(t('confirm_replace_data'))) {
+    $('#data').val(sampleOf(L));
+    $('#centerText').val(L.center_text || '');
+  }
+  $('#langSel').val(code);
+}
+
+function startApp() {
+  const codes = Object.keys(LANGS);
+  const def = codes.find(c => LANGS[c].is_default) || codes[0];
+  FALL = LANGS[def];
+  $('#langSel').empty();
+  codes.forEach(c => $('#langSel').append($('<option>').val(c).text(LANGS[c].name || c)));
+  let saved = null; try { saved = localStorage.getItem('dewey_lang'); } catch (e) {}
+  const first = [new URLSearchParams(location.search).get('lang'), saved, def].find(c => c && LANGS[c]);
+  $('#langSel').off('change').on('change', function () {
+    setLang(this.value);
+    if (lastSvg) $('#btnGen').click();
+  });
+  setLang(first);
+  $('#langError').prop('hidden', true);
+  $('#app').prop('hidden', false);
+}
+
+async function bootLangs() {
+  try {
+    const r = await fetch(LANG_DIR + 'index.json', {cache: 'no-cache'});
+    if (!r.ok) throw new Error(r.status);
+    const files = await r.json();
+    addLangs(await Promise.all(files.map(f =>
+      fetch(LANG_DIR + f, {cache: 'no-cache'}).then(x => x.json()).catch(e => { console.warn('Language file failed:', f, e); return null; }))));
+  } catch (e) { console.warn('Language index failed:', e); }
+  if (Object.keys(LANGS).length) return startApp();
+  $('#langError').prop('hidden', false);
+  $('#langFiles').on('change', async function () {
+    addLangs(await Promise.all([...this.files].map(f => f.text().then(JSON.parse).catch(() => null))));
+    if (Object.keys(LANGS).length) startApp();
+  });
+}
+
+const AR_DIGITS = '٠١٢٣٤٥٦٧٨٩', FA_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
+const toDigits = s => {
+  const set = (L && L.digits) || '0123456789';
+  return s.replace(/[0-9٠-٩۰-۹]/g, d => {
+    let i = '0123456789'.indexOf(d);
+    if (i < 0) i = AR_DIGITS.indexOf(d);
+    if (i < 0) i = FA_DIGITS.indexOf(d);
+    return set[i];
+  });
+};
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const f1 = n => Math.round(n * 100) / 100;
+
+function parseData(text) {
+  return text.split('###')
+    .map(b => b.split('\n').map(l => l.trim()).filter(Boolean))
+    .filter(lines => lines.length)
+    .map(lines => {
+      const items = lines.map(l => {
+        const i = l.lastIndexOf('=');
+        return i < 0 ? {t: l, n: ''} : {t: l.slice(0, i).trim(), n: toDigits(l.slice(i + 1).trim())};
+      });
+      return {main: items[0], subs: items.slice(1)};
+    });
+}
+
+// تقسيم العنوان الطويل إلى أسطر حسب الكلمات
+function wrap(text, fs, avail) {
+  const est = t => t.length * fs * M('wrap');
+  if (est(text) <= avail) return [text];
+  const w = text.split(/\s+/);
+  if (w.length < 2) return [text];
+  let best = 1, diff = 1e9;
+  for (let i = 1; i < w.length; i++) {
+    const d = Math.abs(w.slice(0, i).join(' ').length - w.slice(i).join(' ').length);
+    if (d < diff) { diff = d; best = i; }
+  }
+  return [w.slice(0, best).join(' '), w.slice(best).join(' ')];
+}
+
+function buildSvg(o) {
+  const groups = parseData(o.data);
+  const G = groups.length || 1;
+  const S = 360 / G;
+  const cx = 700, cy = 700, R0 = 195, R1 = 460, R2 = 660;
+  const P = (r, a) => [cx + r * Math.cos(a * Math.PI / 180), cy + r * Math.sin(a * Math.PI / 180)];
+  const wedge = (ra, rb, a1, a2) => {
+    const [x1, y1] = P(rb, a1), [x2, y2] = P(rb, a2), [x3, y3] = P(ra, a2), [x4, y4] = P(ra, a1);
+    return `M${f1(x1)} ${f1(y1)}A${rb} ${rb} 0 0 1 ${f1(x2)} ${f1(y2)}L${f1(x3)} ${f1(y3)}A${ra} ${ra} 0 0 0 ${f1(x4)} ${f1(y4)}Z`;
+  };
+  // اتجاه النص بحيث يبقى مقروءًا (لا يُقلب رأسًا على عقب)
+  const rotOf = a => Math.cos(a * Math.PI / 180) < 0 ? a + 180 : a;
+  const txt = (r, a, s, fill, size, extra = '', y = 0, upright = true) => {
+    const [x, yy] = P(r, a);
+    return `<text transform="translate(${f1(x)} ${f1(yy)}) rotate(${f1(upright ? rotOf(a) : a)})" y="${f1(y + size * 0.35)}" text-anchor="middle" font-size="${f1(size)}" fill="${fill}" ${extra}>${esc(s)}</text>`;
+  };
+  // ملاءمة الحجم بدل textLength (غير مدعوم جيدًا في inkscape)
+  const fit = (s, size, avail) => Math.min(size, avail / (Math.max(s.length, 1) * M('fit')));
+  // إبقاء المدى الرقمي (مثل ٢٠٠-٢٩٩) بترتيبه الصحيح رغم اتجاه الصفحة RTL
+  const ltr = 'direction="ltr" unicode-bidi="bidi-override"';
+
+  let bg = '', mains = '', lines = '', texts = '';
+  groups.forEach((g, i) => {
+    const c = -90 + S / 2 + 3 * S - S * i; // عكس عقارب الساعة
+    const a1 = c - S / 2, a2 = c + S / 2;
+    bg += `<path d="${wedge(R1, R2, a1, a2)}" fill="${o.subBg}"/>`;
+    mains += `<path d="${wedge(R0, R1, a1, a2)}" fill="${o.mainBg}"/>`;
+
+    // التصنيف الرئيس: عنوان + مدى الأرقام
+
+    const t = wrap(g.main.t, o.mainSize, 235);
+    // في اللغات RTL يُعكس مدى الأرقام ليظهر بالترتيب الصحيح / reverse the range in RTL languages
+    if (L.dir === 'rtl') g.main.n = g.main.n.split("-").reverse().join("-");
+    const rows = t.concat([g.main.n]);
+    rows.forEach((row, k) => {
+      const isRange = k === rows.length - 1;
+      const size = fit(row, isRange ? o.mainSize * 0.75 : o.mainSize, 250);
+      const y = (k - (rows.length - 1) / 2) * o.mainSize * 1.2;
+      texts += txt((R0 + R1) / 2, c, row, isRange ? o.rangeColor : o.mainColor, size, `font-weight="bold" ${isRange ? ltr : ''}`, y);
+    });
+
+    // التصنيفات الفرعية: خطوط مستقيمة تقسّم القطاع، والنص على امتداد نصف القطر
+    const n = g.subs.length;
+    for (let k = 1; k < n; k++) {
+      const a = a1 + k * S / n, [xa, ya] = P(R1, a), [xb, yb] = P(R2, a);
+      lines += `<line x1="${f1(xa)}" y1="${f1(ya)}" x2="${f1(xb)}" y2="${f1(yb)}" stroke="${o.subLine}" stroke-width="1.2"/>`;
+    }
+    g.subs.forEach((s, k) => {
+      const a = a1 + (k + 0.5) * S / n;
+      const width = R1 * (S / n) * Math.PI / 180;
+      const fs = Math.min(o.subSize, width * 0.75);
+      const numExtra = `font-weight="bold" ${ltr}`;
+      const avail = R2 - R1 - 75;
+      // علامة $ داخل العنوان الفرعي تقسمه إلى سطرين يُكتبان الواحد فوق الآخر (عموديًا على امتداد نصف القطر نفسه)، ورقم التصنيف بينهما
+      const parts = s.t.split('$').map(x => x.trim()).filter(Boolean);
+      if (parts.length > 1) {
+        const r = R1 + 55 + avail / 2;
+        const rowH = fs * 1.15;
+        texts += txt(r, a, parts[0], o.subColor, fit(parts[0], fs, avail), '', -rowH);
+        texts += txt(r, a, s.n, o.subColor, fs * 0.9, numExtra, 0, o.numDir !== 'uniform');
+        texts += txt(r, a, parts[1], o.subColor, fit(parts[1], fs, avail), '', rowH);
+      } else {
+        texts += txt(R1 + 30, a, s.n, o.subColor, fs * 0.9, numExtra, 0, o.numDir !== 'uniform');
+        const rr = R1 + 55 + avail / 2, one = fit(s.t, fs, avail);
+        // اللغات ذات العناوين الطويلة: تقسيم تلقائي إلى سطرين إذا صغر الخط عن الحد (sub_wrap_below)
+        const ls = one < M('sub_wrap_below') ? wrap(s.t, 1, 0) : [s.t];
+        if (ls.length > 1) {
+          const fs2 = Math.min(fs, width * 0.42);
+          ls.forEach((ln, j) => { texts += txt(rr, a, ln, o.subColor, fit(ln, fs2, avail), '', (j - 0.5) * fs2 * 1.15); });
+        } else texts += txt(rr, a, s.t, o.subColor, one);
+      }
+    });
+    // الفاصل الرئيس المستقيم بين القطاعات
+    const [xa, ya] = P(R0, a1), [xb, yb] = P(R2, a1);
+    lines += `<line x1="${f1(xa)}" y1="${f1(ya)}" x2="${f1(xb)}" y2="${f1(yb)}" stroke="${o.sepColor}" stroke-width="4"/>`;
+  });
+
+  // نص المركز (كل كلمة في سطر)
+  const cw = o.centerText.trim().split(/\s+/).filter(Boolean);
+  const cs = Math.min(44, 330 / (Math.max(...cw.map(w => w.length), 1) * M('wrap') * 1.1));
+  const center = cw.map((w, k) =>
+    `<text x="${cx}" y="${f1(cy + (k - (cw.length - 1) / 2) * cs * 1.25 + cs * 0.35)}" text-anchor="middle" font-size="${cs}" font-weight="bold" fill="${o.mainColor}">${esc(w)}</text>`).join('');
+
+  const circ = (r, w) => `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${o.circleColor}" stroke-width="${w}"/>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1400" width="1400" height="1400" font-family="'${o.font}', ${L.font_fallback || 'Tahoma, Arial, sans-serif'}">
+<rect width="1400" height="1400" fill="#ffffff"/>
+${bg}${mains}
+<circle cx="${cx}" cy="${cy}" r="${R0}" fill="#ffffff"/>
+${lines}
+${circ(R2, 6)}${circ(R1, 4)}${circ(R0, 4)}
+${texts}
+${center}
+</svg>`;
+}
+
+function readOptions() {
+  return {
+    font: $('#fontFamily').val(),
+    mainSize: +$('#mainSize').val() || 34,
+    subSize: +$('#subSize').val() || 20,
+    mainColor: $('#mainColor').val(),
+    mainBg: $('#mainBg').val(),
+    rangeColor: $('#rangeColor').val(),
+    sepColor: $('#sepColor').val(),
+    circleColor: $('#circleColor').val(),
+    subBg: $('#subBg').val(),
+    subColor: $('#subColor').val(),
+    subLine: $('#subLine').val(),
+    numDir: $('#numDir').val(),
+    centerText: $('#centerText').val(),
+    data: $('#data').val()
+  };
+}
+
+let lastSvg = '';
+
+function defaultName() {
+  const d = new Date();
+  return `svg_${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}_${d.getHours()}-${d.getMinutes()}.svg`;
+}
+
+$(function () {
+  bootLangs();
+
+  $('#btnGen').on('click', function () {
+    lastSvg = buildSvg(readOptions());
+    $('#out').html(lastSvg.replace(/^<\?xml[^>]*\?>\s*/, ''));
+    $('#btnExport').prop('disabled', false);
+  });
+
+  $('#btnExport').on('click', function () {
+    if (!lastSvg) return;
+    let name = $('#fileName').val().trim().replace(/[\\/:*?"<>|]/g, '_');
+    if (!name) name = defaultName();
+    if (!/\.svg$/i.test(name)) name += '.svg';
+    const blob = new Blob([lastSvg], {type: 'image/svg+xml;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = $('<a>').attr({href: url, download: name}).appendTo('body');
+    a[0].click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+});
+</script>
+</body>
+</html>
